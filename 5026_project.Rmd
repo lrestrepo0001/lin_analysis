@@ -1,0 +1,141 @@
+---
+title: "5026_proj"
+author: "Leonardo Restrepo"
+date: "11/2/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(broom)
+library(tidyr)
+library(stringr)
+library(naniar)
+library(pastecs)
+library(ggplot2)
+library(corrplot)
+library(car)
+
+
+gData <- readRDS("gData.rds")
+
+#Summary of missing values
+rows<- colnames(gData)
+naVal<-vector()
+for (i in 1:ncol(gData)){     #this tells me how many NA's and empty character vectors I have in the data frame. Doesn't matter if its a numerical column or a character or a factor column
+  naVal[i]<-length(which(gData[,i]==""))+length(which(is.na(gData[,i])==TRUE))
+}
+NaMat<- data.frame(rows,naVal)
+
+# Data cleaning
+rData <- gData %>%
+  select(Name, Average.User.Rating, User.Rating.Count, Price, Age.Rating, Primary.Genre, Languages, Genres)%>%
+  filter(Primary.Genre=="Games")
+rData<-rData[!duplicated(rData$Name),]
+
+rownames(rData)<-rData$Name
+
+# Convert Languages into the number of languages listed.  convert Size from bytes to megabytes
+for (i in 1:nrow(rData)){
+  rData$nLang[i]<-str_count(rData$Languages[i], "[a-zA-Z]{2}")
+  rData$Size[i]<-rData$Size[i]/(1024)^2
+  rData$nGenre[i]<-str_count(rData$Genres[i], ",.")+1
+}
+rData <- rData%>%
+  replace_with_na(replace = list(nLang=0))%>%
+  select(-c(Languages, Primary.Genre, Name, Genres))
+
+# Remove non-numeric characters and converted age rating into a numberic value
+rData$Age.Rating<-gsub(pattern = "\\+", replacement = "", rData$Age.Rating)
+
+for (i in 1:ncol(rData)){
+  rData[,i]<-as.numeric(rData[,i])
+}
+names<-c("ratings", "nReviews", "price", "Age", "nLanguages", "nGenres")
+colnames(rData) <- names
+
+
+
+s2Data<-stat.desc(rData)[4:14,]
+write.table(s2Data, file = "descriptive_stats.", sep = ",", quote = FALSE, row.names = T)
+
+# A review of the correlation plot shows that there is very correlation between any of our variables, and the two pairs that are significantly correlated, Price ~ Size and Size ~ Age, are both under .8. This provides one check for multicolinearity. 
+
+pData <- na.omit(rData)
+COR.data1<-cor(pData)
+
+corrplot(COR.data1,
+         tl.pos="lt", type="upper",
+         tl.col="black", tl.cex=0.6,
+         tl.srt=45, addCoef.col="black",
+         addCoefasPercent = FALSE,
+         sig.level=0.05, insig = "blank")
+dev.copy(png, 'cPlot.png')
+
+
+#Linear model data
+
+mData <- lm(nReviews ~ ratings+
+              price +
+              Age,
+            data = pData,
+            na.action = na.exclude)
+
+mData2 <- lm(nReviews ~ ratings +
+              price +
+              Age +
+              nLanguages,
+            data = pData,
+            na.action = na.exclude)
+mData3 <- lm(nReviews ~ ratings +
+              price +
+              Age +
+              nLanguages+
+              nGenres,
+            data = rData,
+            na.action = na.exclude)
+# I didn't want to lose NA data, so I used na.exclude to pad out my residual plot for later.
+
+s1<-summary(mData)
+s3<-summary(mData3)
+
+r1 <- round(coef(s1), 2)
+r3 <- round(coef(s3), 2)
+# coefficients
+c1 <- paste(r1[, 1], " (", r1[, 2], ")", sep = "")
+c3 <- paste(r3[, 1], " (", r3[, 2], ")", sep = "")
+
+# summary statistics
+sigma <- round(c(s1$sigma, s3$sigma), 2)
+rsq <- round(c(s1$adj.r.squared, s3$adj.r.squared), 2)
+
+# sample sizes
+n <- c(length(s1$residuals), length(s1$residuals))
+
+outtab <- rbind(cbind(c(c1, ""), c3), sigma, rsq, n)
+colnames(outtab) <- c("Model 1", "Model 2")
+rownames(outtab) <- c("Intercept", "ratings", "price", "Age", "nLanguages", "nGenres", "sigma", "Adj. R-Squared", "n")
+outtab
+
+write.csv(outtab, "outtab.txt")
+
+anova(mData,mData2, mData3)
+
+
+summary(mData)
+summary(mData2)
+summary(mData3)
+
+# residuals plot
+plot(mData3, which = 1)
+dev.copy(png, 'residPlot.png')
+
+# QQ plot
+plot(mData3, which = 2)
+dev.copy(png, 'QQ.png')
+
+# Variance Inflation Factor
+vif(mData3)
+write.csv(vif(mData3), "vif.txt")
+
+```
